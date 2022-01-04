@@ -4,6 +4,8 @@
 package ecsservicediscovery
 
 import (
+	"log"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ecs"
 )
@@ -26,6 +28,7 @@ func checkContainerNamePattern(containers []*ecs.ContainerDefinition, config *Ta
 		if config.containerNameRegex.MatchString(aws.StringValue(c.Name)) {
 			return true
 		}
+		log.Printf("D! Container name pattern did not match: '%s' \n", aws.StringValue(c.Name))
 	}
 	return false
 }
@@ -41,10 +44,13 @@ func (p *TaskDefinitionDiscoveryProcessor) Process(cluster string, taskList []*D
 		}
 		for _, t := range p.taskDefsConfig {
 			if t.taskDefRegex.MatchString(aws.StringValue(v.TaskDefinition.TaskDefinitionArn)) {
+				log.Printf("D! TaskDefinitionArn '%s' matches: '%s' \n", aws.StringValue(v.TaskDefinition.TaskDefinitionArn), t.taskDefRegex)
 				if t.ContainerNamePattern == "" || checkContainerNamePattern(v.TaskDefinition.ContainerDefinitions, t) {
 					v.TaskDefinitionBased = true
 					break
 				}
+			} else {
+				log.Printf("D! TaskDefinitionArn '%s' not matches: '%s' \n", aws.StringValue(v.TaskDefinition.TaskDefinitionArn), t.taskDefRegex)
 			}
 		}
 	}

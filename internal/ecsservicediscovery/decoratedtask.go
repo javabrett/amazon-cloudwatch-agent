@@ -5,6 +5,7 @@ package ecsservicediscovery
 
 import (
 	"fmt"
+	"log"
 	"regexp"
 	"strconv"
 
@@ -69,6 +70,7 @@ func addExporterLabels(labels map[string]string, labelKey string, labelValue *st
 // Return "" when fail to get the private ip
 func (t *DecoratedTask) getPrivateIp() string {
 	if t.TaskDefinition.NetworkMode == nil {
+		log.Printf("D! getPrivateIp returning empty string, TaskDefinition.NetworkMode == nil\n")
 		return ""
 	}
 
@@ -78,6 +80,7 @@ func (t *DecoratedTask) getPrivateIp() string {
 			if aws.StringValue(v.Type) == "ElasticNetworkInterface" {
 				for _, d := range v.Details {
 					if aws.StringValue(d.Name) == "privateIPv4Address" {
+						log.Printf("D! getPrivateIp awsvpc, returning '%s'\n", aws.StringValue(d.Value))
 						return aws.StringValue(d.Value)
 					}
 				}
@@ -86,16 +89,21 @@ func (t *DecoratedTask) getPrivateIp() string {
 	}
 
 	if t.EC2Info != nil {
+		log.Printf("D! getPrivateIp, returning t.EC2Info.PrivateIP '%s'\n", t.EC2Info.PrivateIP)
 		return t.EC2Info.PrivateIP
 	}
+
+	log.Printf("D! getPrivateIp returning empty string\n")
 	return ""
 }
 
 func (t *DecoratedTask) getPrometheusExporterPort(configuredPort int64, c *ecs.ContainerDefinition) int64 {
+	log.Printf("D! getPrometheusExporterPort: %d\n", configuredPort)
 	var mappedPort int64 = 0
 	networkMode := aws.StringValue(t.TaskDefinition.NetworkMode)
 	if networkMode == "" || networkMode == ecs.NetworkModeNone {
 		// for network type: none, skipped directly
+		log.Printf("D! getPrometheusExporterPort, skipping, no network mode: %d\n", configuredPort)
 		return 0
 	}
 
@@ -104,6 +112,7 @@ func (t *DecoratedTask) getPrometheusExporterPort(configuredPort int64, c *ecs.C
 		for _, v := range c.PortMappings {
 			if aws.Int64Value(v.ContainerPort) == configuredPort {
 				mappedPort = aws.Int64Value(v.HostPort)
+				log.Printf("D! getPrometheusExporterPort, awsvpc/host, configuredPort:mappedPort: %d:%d\n", configuredPort, mappedPort)
 			}
 		}
 	} else if networkMode == ecs.NetworkModeBridge {
@@ -114,6 +123,7 @@ func (t *DecoratedTask) getPrometheusExporterPort(configuredPort int64, c *ecs.C
 				for _, v := range tc.NetworkBindings {
 					if aws.Int64Value(v.ContainerPort) == configuredPort {
 						mappedPort = aws.Int64Value(v.HostPort)
+						log.Printf("D! getPrometheusExporterPort bridge, configuredPort:mappedPort: %d:%d\n", configuredPort, mappedPort)
 					}
 				}
 			}
@@ -166,24 +176,28 @@ func (t *DecoratedTask) exportDockerLabelBasedTarget(config *ServiceDiscoveryCon
 	targets map[string]*PrometheusTarget) {
 
 	if !t.DockerLabelBased {
+		log.Printf("D! Skipping,  not DockerLabelBased: %v\n", t)
 		return
 	}
 
 	configuredPortStr, ok := c.DockerLabels[config.DockerLabel.PortLabel]
 	if !ok {
 		// skip the container without matching sd_port_label
+		log.Printf("D! Skipping, missing sd_port_label: %v\n", c)
 		return
 	}
 
 	var exporterPort int64
 	if port, err := strconv.Atoi(aws.StringValue(configuredPortStr)); err != nil || port < 0 {
 		// an invalid port definition.
+		log.Printf("D! Skipping, invalid port definition: %s\n", *configuredPortStr)
 		return
 	} else {
 		exporterPort = int64(port)
 	}
 	mappedPort := t.getPrometheusExporterPort(exporterPort, c)
 	if mappedPort == 0 {
+		log.Printf("D! Skipping, mappedPort == 0: %v\n", c)
 		return
 	}
 
@@ -195,6 +209,7 @@ func (t *DecoratedTask) exportDockerLabelBasedTarget(config *ServiceDiscoveryCon
 	}
 	targetKey := fmt.Sprintf("%s:%d%s", ip, mappedPort, metricsPath)
 	if _, ok := targets[targetKey]; ok {
+		log.Printf("D! Skipping, not ok\n")
 		return
 	}
 
@@ -213,23 +228,27 @@ func (t *DecoratedTask) exportTaskDefinitionBasedTarget(config *ServiceDiscovery
 	targets map[string]*PrometheusTarget) {
 
 	if !t.TaskDefinitionBased {
+		log.Printf("D! Skipping, not TaskDefinitionBased: %v\n", t)
 		return
 	}
 
 	for _, v := range config.TaskDefinitions {
 		// skip if task def regex mismatch
 		if !v.taskDefRegex.MatchString(*t.Task.TaskDefinitionArn) {
+			log.Printf("D! Skipping, '%s' does not match '%s'\n", *t.Task.TaskDefinitionArn, v.taskDefRegex)
 			continue
 		}
 
 		// skip if there is container name regex pattern configured and container name mismatch
 		if v.ContainerNamePattern != "" && !v.containerNameRegex.MatchString(*c.Name) {
+			log.Printf("D! Skipping, '%s' does not match '%s'\n", *c.Name, v.containerNameRegex)
 			continue
 		}
 
 		for _, port := range v.metricsPortList {
 			mappedPort := t.getPrometheusExporterPort(int64(port), c)
 			if mappedPort == 0 {
+				log.Printf("D! Skipping, mappedPort == 0: %v\n", t)
 				continue
 			}
 
@@ -240,6 +259,7 @@ func (t *DecoratedTask) exportTaskDefinitionBasedTarget(config *ServiceDiscovery
 			targetKey := fmt.Sprintf("%s:%d%s", ip, mappedPort, metricsPath)
 
 			if _, ok := targets[targetKey]; ok {
+				log.Printf("D! Skipping, not ok\n")
 				continue
 			}
 
@@ -256,22 +276,26 @@ func (t *DecoratedTask) exportServiceEndpointBasedTarget(config *ServiceDiscover
 	targets map[string]*PrometheusTarget) {
 
 	if t.ServiceName == "" {
+		log.Printf("D! Skipping task with empty ServiceName: %v\n", t)
 		return
 	}
 
 	for _, v := range config.ServiceNamesForTasks {
 		// skip if service name regex mismatch
 		if !v.serviceNameRegex.MatchString(t.ServiceName) {
+			log.Printf("D! Skipping task ServiceName '%s' does not match '%s'\n", t.ServiceName, v.serviceNameRegex)
 			continue
 		}
 
 		if v.ContainerNamePattern != "" && !v.containerNameRegex.MatchString(*c.Name) {
+			log.Printf("D! Skipping task container name '%s' does not match '%s'\n", *c.Name, v.ContainerNamePattern)
 			continue
 		}
 
 		for _, port := range v.metricsPortList {
 			mappedPort := t.getPrometheusExporterPort(int64(port), c)
 			if mappedPort == 0 {
+				log.Printf("D! Skipping mappedPort == 0")
 				continue
 			}
 
@@ -282,6 +306,7 @@ func (t *DecoratedTask) exportServiceEndpointBasedTarget(config *ServiceDiscover
 			targetKey := fmt.Sprintf("%s:%d%s", ip, mappedPort, metricsPath)
 
 			if _, ok := targets[targetKey]; ok {
+				log.Printf("D! Skipping, not ok == 0")
 				continue
 			}
 
@@ -296,6 +321,7 @@ func (t *DecoratedTask) exportServiceEndpointBasedTarget(config *ServiceDiscover
 func (t *DecoratedTask) ExporterInformation(config *ServiceDiscoveryConfig, dockerLabelRegex *regexp.Regexp, targets map[string]*PrometheusTarget) {
 	ip := t.getPrivateIp()
 	if ip == "" {
+		log.Printf("D! Skipping task with no private IP address: %v\n", t)
 		return
 	}
 	for _, c := range t.TaskDefinition.ContainerDefinitions {

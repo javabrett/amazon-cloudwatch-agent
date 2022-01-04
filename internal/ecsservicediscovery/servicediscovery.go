@@ -78,6 +78,7 @@ func (sd *ServiceDiscovery) work() {
 			log.Printf("E! ECS SD processor: %v got error: %v \n", p.ProcessorName(), err.Error())
 			return
 		}
+		log.Printf("D! ECS SD processor: %v returned task count: %v \n", p.ProcessorName(), len(clusterTasks))
 	}
 	sd.stats.ShowStats()
 }
